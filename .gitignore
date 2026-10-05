@@ -1,0 +1,27 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Node & Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# OS Files
+.DS_Store
+Thumbs.db
