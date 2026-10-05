@@ -90,13 +90,39 @@ func (a *APIKeyAuthenticator) Authenticate(ctx context.Context, key string) (*Id
 		return nil, ErrInvalidToken
 	}
 
-	if a.db == nil || a.db.Pool == nil {
-		return nil, ErrInvalidToken
-	}
-
 	// Hash key with SHA-256
 	hash := sha256.Sum256([]byte(key))
 	hashHex := hex.EncodeToString(hash[:])
+
+	if a.db == nil || a.db.Pool == nil {
+		memKeysMu.RLock()
+		rec, ok := memKeys[hashHex]
+		memKeysMu.RUnlock()
+		if !ok {
+			return nil, ErrInvalidToken
+		}
+		if rec.RevokedAt != nil {
+			return nil, ErrTokenRevoked
+		}
+		if rec.ExpiresAt != nil && rec.ExpiresAt.Before(time.Now()) {
+			return nil, ErrInvalidToken
+		}
+		role := RoleUser
+		for _, sc := range rec.Scopes {
+			if sc == ScopeAdmin {
+				role = RoleAdmin
+				break
+			}
+		}
+		return &Identity{
+			UserID:    rec.OwnerID,
+			Role:      role,
+			Scopes:    rec.Scopes,
+			IsAPIKey:  true,
+			APIKeyID:  rec.ID.String(),
+			CreatedAt: rec.CreatedAt,
+		}, nil
+	}
 
 	query := `
 		SELECT id, name, owner_id, scopes, expires_at, revoked_at

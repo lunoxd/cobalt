@@ -62,6 +62,8 @@ func NewServer(cfg *config.Config, db *database.DB, pool *jobs.Pool) *Server {
 	var projRepo projects.Repository
 	if db != nil && db.Pool != nil {
 		projRepo = projects.NewPostgresRepository(db)
+	} else {
+		projRepo = projects.NewMemoryRepository()
 	}
 	projService := projects.NewService(projRepo)
 	apiKeyService := auth.NewAPIKeyService(db)

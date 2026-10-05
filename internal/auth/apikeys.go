@@ -7,11 +7,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/lunoxd/cobalt/internal/database"
+)
+
+var (
+	memKeysMu sync.RWMutex
+	memKeys   = make(map[string]APIKeyRecord) // keyHash -> record
 )
 
 // APIKeyRecord represents an API key in the database.
@@ -81,6 +87,16 @@ func (s *APIKeyService) Create(ctx context.Context, ownerID, name string, scopes
 		CreatedAt: time.Now(),
 	}
 
+	if s.db == nil || s.db.Pool == nil {
+		memKeysMu.Lock()
+		memKeys[hashHex] = record
+		memKeysMu.Unlock()
+		return &CreateKeyResult{
+			APIKeyRecord: record,
+			PlaintextKey: plaintext,
+		}, nil
+	}
+
 	query := `
 		INSERT INTO api_keys (
 			id, key_hash, key_prefix, name, owner_id, scopes, expires_at, created_at
@@ -104,6 +120,18 @@ func (s *APIKeyService) Create(ctx context.Context, ownerID, name string, scopes
 
 // List returns all active and revoked API keys for the owner (or all if admin).
 func (s *APIKeyService) List(ctx context.Context, caller *Identity) ([]APIKeyRecord, error) {
+	if s.db == nil || s.db.Pool == nil {
+		memKeysMu.RLock()
+		defer memKeysMu.RUnlock()
+		var keys []APIKeyRecord
+		for _, k := range memKeys {
+			if caller.IsAdmin() || k.OwnerID == caller.UserID {
+				keys = append(keys, k)
+			}
+		}
+		return keys, nil
+	}
+
 	var (
 		rows pgx.Rows
 		err  error
@@ -147,6 +175,23 @@ func (s *APIKeyService) List(ctx context.Context, caller *Identity) ([]APIKeyRec
 
 // Revoke marks an API key as revoked.
 func (s *APIKeyService) Revoke(ctx context.Context, keyID uuid.UUID, caller *Identity) error {
+	if s.db == nil || s.db.Pool == nil {
+		memKeysMu.Lock()
+		defer memKeysMu.Unlock()
+		now := time.Now()
+		for h, k := range memKeys {
+			if k.ID == keyID {
+				if !caller.IsAdmin() && k.OwnerID != caller.UserID {
+					return errors.New("unauthorized to revoke key")
+				}
+				k.RevokedAt = &now
+				memKeys[h] = k
+				return nil
+			}
+		}
+		return errors.New("key not found")
+	}
+
 	var query string
 	var err error
 
